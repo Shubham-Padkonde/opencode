@@ -9,7 +9,26 @@ test.each([500, 401, 404])("startup does not replace the launch location after a
   const result = await probe(() => new Response("Location initialization failed", { status }))
   expect(result.fallbacks).toBe(0)
   expect(result.handoffs).toBe(0)
+  expect(String(result.error)).toContain(process.cwd())
+  if (status === 500) expect(String(result.error)).toContain("Location initialization failed")
   expect(String(result.error)).not.toContain("terminal handoff reached")
+})
+
+test("startup reports the HTTP status when the server returns no failure details", async () => {
+  const result = await probe(() => new Response(null, { status: 503 }))
+  expect(result.fallbacks).toBe(0)
+  expect(result.handoffs).toBe(0)
+  expect(String(result.error)).toContain(process.cwd())
+  expect(String(result.error)).toContain("HTTP 503")
+})
+
+test("startup reports the server's initialization failure with the launch directory", async () => {
+  const message = "EEXIST: file already exists, mkdir '/project/.opencode/shell'"
+  const result = await probe(() => json({ message }, { status: 500 }))
+  expect(result.fallbacks).toBe(0)
+  expect(result.handoffs).toBe(0)
+  expect(String(result.error)).toContain(process.cwd())
+  expect(String(result.error)).toContain(message)
 })
 
 test("startup retains the remote default fallback for a missing launch directory", async () => {

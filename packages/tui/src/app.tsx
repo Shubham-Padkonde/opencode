@@ -2,7 +2,7 @@ import { existsSync } from "fs"
 import path from "path"
 import { render, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import "./component/spinner-renderable"
-import { Effect, Latch } from "effect"
+import { Effect, Latch, Option, Schema } from "effect"
 import { Service, type Endpoint } from "@opencode/client/effect/service"
 import { isLocationNotFoundError, OpenCode, type SessionInfo } from "@opencode/client"
 import { Global } from "@opencode/util/global"
@@ -105,7 +105,7 @@ import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "./context/k
 
 import { DialogVariant } from "./component/dialog-variant"
 import { destroyRenderer, setTerminalTitle } from "./util/renderer"
-import { cliErrorMessage, errorFormat } from "./util/error"
+import { cliErrorMessage, errorFormat, errorMessage } from "./util/error"
 import { AttentionProvider } from "./context/attention"
 import { StorageProvider, useStorage } from "./context/storage"
 import { SessionTerminalsProvider } from "./context/session-terminals"
@@ -223,10 +223,36 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
     fetch: noTimeoutFetch,
   }
   const api = OpenCode.make(options)
-  const location = yield* Effect.tryPromise(() => api.file.list({ location: { directory: process.cwd() } })).pipe(
+  const launchDirectory = process.cwd()
+  const startup = OpenCode.make({
+    ...options,
+    fetch: Object.assign(
+      async (request: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const response = await noTimeoutFetch(request, init)
+        if (response.status < 500) return response
+        // The promise client discards undeclared error bodies, including initialization failures.
+        const text = await response.text()
+        const message = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Struct({ message: Schema.String })))(
+          text,
+        ).pipe(
+          Option.map((body) => body.message),
+          Option.getOrElse(() => text),
+        )
+        throw new Error(`HTTP ${response.status}${message ? `: ${message}` : ""}`)
+      },
+      { preconnect: noTimeoutFetch.preconnect },
+    ),
+  })
+  const location = yield* Effect.tryPromise(() => startup.file.list({ location: { directory: launchDirectory } })).pipe(
     Effect.map((response) => response.location),
     Effect.catch((error) =>
-      isLocationNotFoundError(error.cause) ? Effect.tryPromise(() => api.location.get()) : Effect.fail(error),
+      isLocationNotFoundError(error.cause)
+        ? Effect.tryPromise(() => api.location.get())
+        : Effect.fail(
+            new Error(`Could not open "${launchDirectory}" on the server: ${errorMessage(error.cause)}`, {
+              cause: error.cause,
+            }),
+          ),
     ),
   )
   const directory = location.directory
